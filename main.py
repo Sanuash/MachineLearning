@@ -80,6 +80,95 @@ def asymmetric_exp_error(y_true, y_pred, alpha=1.5):
     weights = np.where(r > 0, alpha, 1.0)
     return 1 - np.mean(weights * rel_error)
 
+# Готовим данные для предсказаний
+def proces_cat_features(df_train, df_test):
+    X_train_cat = df_train.drop(columns=["selling_price"])
+    X_test_cat = df_test.drop(columns=["selling_price"])
+
+    X_train_cat["seats"] = X_train_cat["seats"].astype(str)
+    X_test_cat["seats"] = X_test_cat["seats"].astype(str)
+
+    cat_cols = [col for col in X_train_cat.columns if X_train_cat[col].dtype == "object"]
+
+    combined = pd.concat([X_train_cat, X_test_cat], axis=0)
+
+    encoded_combined = pd.get_dummies(combined[cat_cols], drop_first=True)
+
+    encoded_X_train_cat = encoded_combined.iloc[:len(X_train_cat), :]
+    encoded_X_test_cat = encoded_combined.iloc[len(X_train_cat):, :]
+
+    final_X_train = pd.concat([X_train_cat[list(col for col in X_train_cat.columns if X_train_cat[col].dtype in ["int64", "float64"])], encoded_X_train_cat], axis=1)
+    final_X_test = pd.concat([X_test_cat[list(col for col in X_test_cat.columns if X_test_cat[col].dtype in ["int64", "float64"])], encoded_X_test_cat], axis=1)
+
+    return final_X_train, final_X_test
+
+def process_name(value):
+    data = value.split()
+    return data[0], data[1]
+
+def make_prediction(df):
+    scaler = StandardScaler()
+
+    df_tr_cat = df_train.copy()
+    df_te_cat = df.copy()
+
+    df_tr_cat[["brand", "model"]] = df_tr_cat.name.apply(lambda x: pd.Series(process_name(x)))
+    df_te_cat[["brand", "model"]] = df_te_cat.name.apply(lambda x: pd.Series(process_name(x)))
+
+    df_tr_cat = df_tr_cat.drop(columns=["name"])
+    df_te_cat = df_te_cat.drop(columns=["name"])
+
+    # final_X_train, final_X_test = proces_cat_features(df_tr_cat, df_te_cat)
+
+    df_tr_cat["year"] = 2020 - df_tr_cat["year"]
+    df_te_cat["year"] = 2020 - df_te_cat["year"]
+
+    final_X_train, final_X_test = proces_cat_features(df_tr_cat, df_te_cat)
+
+    num_cols = final_X_train.select_dtypes(include=["int64", "float64"]).columns
+    cat_cols = final_X_train.select_dtypes(include=[bool]).columns
+
+    poly = PolynomialFeatures(degree=2, include_bias=False)
+
+    final_X_train_poly = pd.DataFrame(poly.fit_transform(final_X_train[num_cols]), columns=poly.get_feature_names_out(num_cols))
+    final_X_test_poly = pd.DataFrame(poly.fit_transform(final_X_test[num_cols]), columns=poly.get_feature_names_out(num_cols))
+
+    scaler.fit(final_X_train_poly)
+
+
+    final_X_test_poly_transformed = pd.DataFrame(
+        scaler.transform(final_X_test_poly),
+        columns=final_X_test_poly.columns,
+        index=final_X_test_poly.index
+    )
+
+    final_X_test = pd.concat([final_X_test[cat_cols], final_X_test_poly_transformed], axis=1)
+
+    # Приводим признаки к единообразию
+    missing = set(valid_cols) - set(final_X_test.columns)
+    extra = set(final_X_test.columns) - set(valid_cols)
+
+    # удаляем лишние
+    final_X_test.drop(columns=list(extra), inplace=True)
+
+    # добавляем недостающие
+    for col in missing:
+        final_X_test[col] = 0
+
+    # порядок колонок
+    final_X_test = final_X_test[valid_cols]
+
+    y_pred = np.exp(model.predict(final_X_test))
+
+    return (final_X_test, y_pred)
+
+# Сразу загрузим модель и трейн датасет для визуализации EDA
+with open("bestmodel.pkl", "rb") as f:
+    model = pickle.load(f)
+
+with open("columns.pkl", "rb") as f:
+    valid_cols = pickle.load(f)
+
 # Сразу загрузим модель и трейн датасет для визуализации EDA
 with open("bestmodel.pkl", "rb") as f:
     model = pickle.load(f)
@@ -168,72 +257,7 @@ if df is not None:
     with col2:
         st.metric("Количество строк", df.shape[0])
 
-
-
-    # Готовим данные для предсказаний
-    def proces_cat_features(df_train, df_test):
-        X_train_cat = df_train.drop(columns=["selling_price"])
-        X_test_cat = df_test.drop(columns=["selling_price"])
-
-        X_train_cat["seats"] = X_train_cat["seats"].astype(str)
-        X_test_cat["seats"] = X_test_cat["seats"].astype(str)
-
-        cat_cols = [col for col in X_train_cat.columns if X_train_cat[col].dtype == "object"]
-
-        combined = pd.concat([X_train_cat, X_test_cat], axis=0)
-
-        encoded_combined = pd.get_dummies(combined[cat_cols], drop_first=True)
-
-        encoded_X_train_cat = encoded_combined.iloc[:len(X_train_cat), :]
-        encoded_X_test_cat = encoded_combined.iloc[len(X_train_cat):, :]
-
-        final_X_train = pd.concat([X_train_cat[list(col for col in X_train_cat.columns if X_train_cat[col].dtype in ["int64", "float64"])], encoded_X_train_cat], axis=1)
-        final_X_test = pd.concat([X_test_cat[list(col for col in X_test_cat.columns if X_test_cat[col].dtype in ["int64", "float64"])], encoded_X_test_cat], axis=1)
-
-        return final_X_train, final_X_test
-
-    def process_name(value):
-        data = value.split()
-        return data[0], data[1]
-
-    scaler = StandardScaler()
-
-    df_tr_cat = df_train.copy()
-    df_te_cat = df.copy()
-
-    df_tr_cat[["brand", "model"]] = df_tr_cat.name.apply(lambda x: pd.Series(process_name(x)))
-    df_te_cat[["brand", "model"]] = df_te_cat.name.apply(lambda x: pd.Series(process_name(x)))
-
-    df_tr_cat = df_tr_cat.drop(columns=["name"])
-    df_te_cat = df_te_cat.drop(columns=["name"])
-
-    # final_X_train, final_X_test = proces_cat_features(df_tr_cat, df_te_cat)
-
-    df_tr_cat["year"] = 2020 - df_tr_cat["year"]
-    df_te_cat["year"] = 2020 - df_te_cat["year"]
-
-    final_X_train, final_X_test = proces_cat_features(df_tr_cat, df_te_cat)
-
-    num_cols = final_X_train.select_dtypes(include=["int64", "float64"]).columns
-    cat_cols = final_X_train.select_dtypes(include=[bool]).columns
-
-    poly = PolynomialFeatures(degree=2, include_bias=False)
-
-    final_X_train_poly = pd.DataFrame(poly.fit_transform(final_X_train[num_cols]), columns=poly.get_feature_names_out(num_cols))
-    final_X_test_poly = pd.DataFrame(poly.fit_transform(final_X_test[num_cols]), columns=poly.get_feature_names_out(num_cols))
-
-    scaler.fit(final_X_train_poly)
-
-
-    final_X_test_poly_transformed = pd.DataFrame(
-        scaler.transform(final_X_test_poly),
-        columns=final_X_test_poly.columns,
-        index=final_X_test_poly.index
-    )
-
-    final_X_test = pd.concat([final_X_test[cat_cols], final_X_test_poly_transformed], axis=1)
-
-    y_pred = np.exp(model.predict(final_X_test))
+    final_X_test, y_pred = make_prediction(df)
 
     with st.expander("Показать Предсказания модели"):
         st.dataframe(y_pred)
@@ -272,3 +296,39 @@ if df is not None:
     sns.barplot(data=coef_df.head(20), x="Coefficient", y="Feature", palette="viridis", ax=ax)
     ax.set_title("Топ 20 признаков по весам модели")
     st.pyplot(fig)
+
+st.subheader("🔮 Предсказать стоимость автомобиля")
+
+# Все исходные признаки, которые нужны модели
+feature_names = df_train.columns
+
+with st.form("manual_input_form"):
+    st.write("Введите параметры автомобиля:")
+
+    input_data = {}
+
+    for col in feature_names:
+        if df_train[col].dtype == "object":
+            # Категориальные
+            unique_vals = sorted(df_train[col].astype(str).unique().tolist())
+            input_data[col] = st.selectbox(col, unique_vals)
+        else:
+            # Числовые
+            default_val = float(df_train[col].median())
+            input_data[col] = st.number_input(col, value=default_val)
+
+    # 🔥 Обязательная кнопка отправки формы
+    submitted = st.form_submit_button("Сделать предсказание", use_container_width=True)
+
+if submitted:
+    try:
+        # Создаем датафрейм с одним объектом
+        input_df = pd.DataFrame([input_data])
+
+        # Предсказани
+        y_pred = make_prediction(input_df)[1]
+
+        st.success(f"**Предсказанная стоимость: {y_pred[0]:,.0f} $**")
+    
+    except Exception as e:
+        st.error(f"Ошибка при предсказании: {e}")
